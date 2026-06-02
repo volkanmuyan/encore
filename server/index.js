@@ -5,10 +5,12 @@ const express    = require('express');
 const cors       = require('cors');
 const rateLimit  = require('express-rate-limit');
 
-const spotifyRouter   = require('./routes/spotify');
-const concertsRouter  = require('./routes/concerts');
-const setlistsRouter  = require('./routes/setlists');
-const usersRouter     = require('./routes/users');
+const spotifyRouter        = require('./routes/spotify');
+const concertsRouter       = require('./routes/concerts');
+const setlistsRouter       = require('./routes/setlists');
+const usersRouter          = require('./routes/users');
+const notificationsRouter  = require('./routes/notifications');
+const messagesRouter       = require('./routes/messages');
 
 const app = express();
 
@@ -40,10 +42,12 @@ const limiter = rateLimit({ windowMs: 60_000, max: 60 });
 app.use('/api/', limiter);
 
 // ── ROUTES ───────────────────────────────────
-app.use('/api/spotify',  spotifyRouter);
-app.use('/api/concerts', concertsRouter);
-app.use('/api/setlists', setlistsRouter);
-app.use('/api/users',    usersRouter);
+app.use('/api/spotify',        spotifyRouter);
+app.use('/api/concerts',       concertsRouter);
+app.use('/api/setlists',       setlistsRouter);
+app.use('/api/users',          usersRouter);
+app.use('/api/notifications',  notificationsRouter);
+app.use('/api/messages',       messagesRouter);
 
 // ── HEALTH ───────────────────────────────────
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));

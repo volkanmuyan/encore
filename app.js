@@ -627,6 +627,10 @@ function navigate(screenId) {
     renderTimeline();
     refreshProfileCommunities();
   }
+  if (screenId === 'screen-notifications') {
+    loadNotifications();
+    setTimeout(markNotificationsRead, 1200);
+  }
   if (screenId === 'screen-communities') {
     renderCommunities();
   }
@@ -796,6 +800,16 @@ function openProfile(username) {
     }
   }
 
+  const msgBtn = document.getElementById('po-msg-btn');
+  if (msgBtn) {
+    if (isOwnProfile) {
+      msgBtn.style.display = 'none';
+    } else {
+      msgBtn.style.display = 'flex';
+      msgBtn.onclick = () => { closeProfile(); openMessages(u.username); };
+    }
+  }
+
   const grid = document.getElementById('po-grid');
   grid.innerHTML = '';
   (u.attended || []).forEach(c => {
@@ -809,6 +823,213 @@ function openProfile(username) {
   document.getElementById('profile-overlay').scrollTop = 0;
 }
 
+// ── NOTIFICATIONS ────────────────────────────────────────────────────────────
+let _notifPollTimer = null;
+
+async function loadNotifications() {
+  const user = DataService.getCurrentUser();
+  if (!user) return;
+  try {
+    const res  = await fetch(`${DataService.apiBase}/notifications?username=${encodeURIComponent(user.username)}`);
+    const list = res.ok ? await res.json() : [];
+    _renderNotifications(list);
+    _updateNotifBadge(list.filter(n => !n.read).length);
+  } catch {}
+}
+
+function _renderNotifications(list) {
+  const el = document.getElementById('notif-list');
+  if (!el) return;
+  if (!list.length) {
+    el.innerHTML = '<div class="notif-empty">Henüz bildirim yok</div>';
+    return;
+  }
+  el.innerHTML = list.map(n => {
+    const cls  = n.read ? '' : ' notif-unread';
+    const ago  = _timeAgo(n.ts);
+    const from = escHtml(n.from || '');
+    if (n.type === 'follow') {
+      return `<div class="notif-item${cls}" onclick="openProfile('${from}')">
+        <img class="notif-avatar" src="https://i.pravatar.cc/48?u=${encodeURIComponent(n.from)}" alt="">
+        <div class="notif-body">
+          <span class="notif-text"><strong>${from}</strong> seni takip etmeye başladı</span>
+          <span class="notif-time">${ago}</span>
+        </div>
+      </div>`;
+    }
+    if (n.type === 'message') {
+      return `<div class="notif-item${cls}" onclick="openMessages('${from}')">
+        <img class="notif-avatar" src="https://i.pravatar.cc/48?u=${encodeURIComponent(n.from)}" alt="">
+        <div class="notif-body">
+          <span class="notif-text"><strong>${from}</strong> sana mesaj gönderdi</span>
+          <span class="notif-time">${ago}</span>
+        </div>
+      </div>`;
+    }
+    return '';
+  }).join('');
+}
+
+function _updateNotifBadge(count) {
+  const badge = document.getElementById('notif-badge');
+  if (!badge) return;
+  if (count > 0) {
+    badge.style.display = 'flex';
+    badge.textContent   = count > 9 ? '9+' : String(count);
+  } else {
+    badge.style.display = 'none';
+    badge.textContent   = '';
+  }
+}
+
+async function markNotificationsRead() {
+  const user = DataService.getCurrentUser();
+  if (!user) return;
+  try {
+    await fetch(`${DataService.apiBase}/notifications/read`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ username: user.username }),
+    });
+  } catch {}
+  _updateNotifBadge(0);
+  document.querySelectorAll('.notif-unread').forEach(el => el.classList.remove('notif-unread'));
+}
+
+function _sendNotification(to, type) {
+  const user = DataService.getCurrentUser();
+  if (!user || !to || to.toLowerCase() === user.username.toLowerCase()) return;
+  fetch(`${DataService.apiBase}/notifications`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ to, from: user.username, type }),
+  }).catch(() => {});
+}
+
+function _timeAgo(ts) {
+  const d = Date.now() - ts;
+  if (d < 60_000)      return 'az önce';
+  if (d < 3_600_000)   return Math.floor(d / 60_000) + 'd önce';
+  if (d < 86_400_000)  return Math.floor(d / 3_600_000) + 's önce';
+  if (d < 604_800_000) return Math.floor(d / 86_400_000) + 'g önce';
+  return new Date(ts).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
+}
+
+// ── MESSAGES ─────────────────────────────────────────────────────────────────
+let _msgPartner   = null;
+let _msgPollTimer = null;
+let _msgLastCount = 0;
+
+function openMessages(partner) {
+  _msgPartner = partner || null;
+  document.getElementById('messages-overlay').classList.add('open');
+  if (partner) {
+    _showChat(partner);
+  } else {
+    showInbox();
+  }
+}
+
+function closeMessages() {
+  document.getElementById('messages-overlay').classList.remove('open');
+  clearInterval(_msgPollTimer);
+  _msgPollTimer = null;
+  _msgPartner   = null;
+}
+
+async function showInbox() {
+  _msgPartner = null;
+  clearInterval(_msgPollTimer);
+  document.getElementById('msg-inbox-view').style.display = 'block';
+  document.getElementById('msg-chat-view').style.display  = 'none';
+  const user = DataService.getCurrentUser();
+  if (!user) return;
+  const list = document.getElementById('msg-inbox-list');
+  list.innerHTML = '<div class="msg-empty">Yükleniyor…</div>';
+  try {
+    const res   = await fetch(`${DataService.apiBase}/messages/inbox?username=${encodeURIComponent(user.username)}`);
+    const inbox = res.ok ? await res.json() : [];
+    if (!inbox.length) { list.innerHTML = '<div class="msg-empty">Henüz mesaj yok</div>'; return; }
+    list.innerHTML = inbox.map(c => `
+      <div class="msg-conv-item" onclick="openMessages('${escHtml(c.partner)}')">
+        <img class="msg-conv-avatar" src="https://i.pravatar.cc/48?u=${encodeURIComponent(c.partner)}" alt="">
+        <div class="msg-conv-body">
+          <div class="msg-conv-top">
+            <span class="msg-conv-name">${escHtml(c.partner)}</span>
+            <span class="msg-conv-time">${_timeAgo(c.ts)}</span>
+          </div>
+          <p class="msg-conv-preview">${escHtml((c.text || '').slice(0, 60))}${c.text && c.text.length > 60 ? '…' : ''}</p>
+        </div>
+        ${c.unread ? `<span class="msg-unread-badge">${c.unread}</span>` : ''}
+      </div>`).join('');
+  } catch {
+    list.innerHTML = '<div class="msg-empty">Mesajlar yüklenemedi</div>';
+  }
+}
+
+async function _showChat(partner) {
+  _msgPartner = partner;
+  _msgLastCount = 0;
+  document.getElementById('msg-inbox-view').style.display = 'none';
+  document.getElementById('msg-chat-view').style.display  = 'flex';
+  document.getElementById('msg-chat-title').textContent   = partner;
+  await _loadConversation();
+  const user = DataService.getCurrentUser();
+  if (user) {
+    fetch(`${DataService.apiBase}/messages/read`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ username: user.username, partner }),
+    }).catch(() => {});
+  }
+  clearInterval(_msgPollTimer);
+  _msgPollTimer = setInterval(_loadConversation, 10_000);
+}
+
+async function _loadConversation() {
+  const user = DataService.getCurrentUser();
+  if (!user || !_msgPartner) return;
+  try {
+    const res  = await fetch(`${DataService.apiBase}/messages?user1=${encodeURIComponent(user.username)}&user2=${encodeURIComponent(_msgPartner)}`);
+    const msgs = res.ok ? await res.json() : [];
+    if (msgs.length === _msgLastCount) return;
+    _msgLastCount = msgs.length;
+    const body = document.getElementById('msg-chat-body');
+    if (!body) return;
+    const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
+    body.innerHTML = msgs.map(m => {
+      const mine = m.from.toLowerCase() === user.username.toLowerCase();
+      return `<div class="msg-bubble ${mine ? 'mine' : 'theirs'}">${escHtml(m.text)}</div>`;
+    }).join('');
+    if (atBottom || _msgLastCount === msgs.length) body.scrollTop = body.scrollHeight;
+  } catch {}
+}
+
+async function sendMessage() {
+  const user = DataService.getCurrentUser();
+  if (!user || !_msgPartner) return;
+  const input = document.getElementById('msg-input');
+  const text  = (input.value || '').trim();
+  if (!text) return;
+  input.value    = '';
+  input.disabled = true;
+  try {
+    await fetch(`${DataService.apiBase}/messages`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ from: user.username, to: _msgPartner, text }),
+    });
+    _sendNotification(_msgPartner, 'message');
+    _msgLastCount = 0;
+    await _loadConversation();
+  } catch {
+    showToast('Mesaj gönderilemedi');
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+}
+
 // ── USER FOLLOW ──
 function toggleFollowUser(username, btn) {
   const nowFollowing = DataService.toggleFollow(username);
@@ -816,6 +1037,7 @@ function toggleFollowUser(username, btn) {
   btn.classList.toggle('following', nowFollowing);
   refreshFollowStats();
   showToast(nowFollowing ? `${username} takip ediliyor` : `${username} takipten çıkıldı`);
+  if (nowFollowing) _sendNotification(username, 'follow');
 }
 
 function renderUserList(users) {
@@ -1612,9 +1834,13 @@ document.getElementById('search-genre-chips')?.addEventListener('click', functio
 // ── INIT ──
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
-  // Re-sync profile to backend so existing users are discoverable cross-device
   const _initUser = DataService.getCurrentUser();
-  if (_initUser) DataService._syncUserToBackend(_initUser);
+  if (_initUser) {
+    DataService._syncUserToBackend(_initUser);
+    loadNotifications();
+    _notifPollTimer = setInterval(() => { if (DataService.getCurrentUser()) loadNotifications(); }, 60_000);
+  }
+  document.getElementById('msg-input')?.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
   loadFeaturedConcerts();
   refreshProfileStats();
   refreshFollowStats();
